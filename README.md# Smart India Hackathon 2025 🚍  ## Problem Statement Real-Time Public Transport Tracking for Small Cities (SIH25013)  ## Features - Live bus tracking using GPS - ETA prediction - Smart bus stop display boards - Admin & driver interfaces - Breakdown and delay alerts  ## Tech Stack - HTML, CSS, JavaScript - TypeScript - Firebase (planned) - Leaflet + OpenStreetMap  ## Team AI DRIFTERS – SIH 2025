@@ -1,0 +1,20 @@
+# Smart India Hackathon 2025 🚍
+
+## Problem Statement
+Real-Time Public Transport Tracking for Small Cities (SIH25013)
+
+## Features
+- Live bus tracking using GPS
+- ETA prediction
+- Smart bus stop display boards
+- Admin & driver interfaces
+- Breakdown and delay alerts
+
+## Tech Stack
+- HTML, CSS, JavaScript
+- TypeScript
+- Firebase (planned)
+- Leaflet + OpenStreetMap
+
+## Team
+AI DRIFTERS – SIH 2025

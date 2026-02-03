@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sarathi – Real-time Bus Tracking (Punjab – Multi-Route Demo, Debug-safe)</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    html, body { height: 100%; }
+    #map { height: 100vh; width: 100%; z-index: 1; }
+    .details-panel { position: fixed; top: 0; right: -420px; width: 420px; height: 100vh; background: #fff; box-shadow: -2px 0 12px rgba(0,0,0,0.12); transition: right .3s ease; z-index: 1000; overflow-y: auto; }
+    .details-panel.open { right: 0; }
+    @media (max-width: 640px){ .details-panel{ width:100%; right:-100%; } }
+    .bus-icon { transition: transform .4s linear; }
+    .test-badge { font-size: 10px; padding: 2px 6px; border-radius: 8px; }
+  </style>
+ <style>
+  /* Force all common text elements to be dark gray */
+  body, h1, h2, h3, h4, h5, h6, p, a, label, select, option, button, span {
+    color: #1c1e20 !important;  /* Tailwind gray-800 */
+  }
+</style>
+
+    
+</head>
+<script>
+  // Global labels store
+  const labels = {};
+
+  // Simple translation function
+  function t(key) { return labels[key] || key; }
+
+  // Load language JSON
+  async function loadLanguage(lang) {
+    try {
+      const res = await fetch(`lang/${lang}.json`);
+      if (!res.ok) throw new Error(`Missing ${lang}.json`);
+      const data = await res.json();
+      Object.assign(labels, data);
+      applyTranslations();
+    } catch (err) {
+      console.error('Language load failed:', err);
+    }
+  }
+
+  // Apply translations to page elements
+  function applyTranslations() {
+    // Buttons
+    document.getElementById('locate-me').innerHTML = `<i class="fa-solid fa-location-crosshairs mr-1"></i>${t('locateMe')}`;
+    document.getElementById('find-shortest-route')?.innerHTML = `<i class="fa-solid fa-route mr-1"></i>${t('nearestStop')}`;
+    document.getElementById('nearest-station')?.innerHTML = `<i class="fa-solid fa-route mr-1"></i>${t('nearestStation')}`;
+    document.getElementById('open-complaint').innerHTML = `<i class="fa-regular fa-comment-dots mr-1"></i>${t('complaint')}`;
+    document.getElementById('toggle-offline').innerHTML = `<i class="fa-solid fa-signal mr-1"></i>${t('statusOffline') || 'Go Offline'}`;
+
+    // Complaint modal labels
+    document.querySelector('label[for="cmp-gender"]').textContent = t('gender');
+    document.querySelector('label[for="cmp-category"]').textContent = t('category');
+    document.querySelector('label[for="cmp-desc"]').textContent = t('description');
+    document.querySelector('#cancel-complaint').textContent = t('cancel');
+    document.querySelector('#complaint-form button[type="submit"]').textContent = t('submit');
+
+    // Display board heading
+    document.querySelector('#display-board .font-semibold')?.textContent = t('displayBoard');
+  }
+
+  // Language switcher (optional: add a <select> in your header)
+  const langSelect = document.createElement('select');
+  langSelect.id = 'lang-select';
+  langSelect.className = 'ml-2 border rounded px-2 py-1';
+  langSelect.innerHTML = `<option value="en">English</option><option value="hi">हिन्दी</option>`;
+  document.querySelector('header').appendChild(langSelect);
+
+  langSelect.addEventListener('change', e => loadLanguage(e.target.value));
+
+  // Load default language
+  loadLanguage('en');
+</script>
+
+<body class="overflow-hidden">
+  <!-- Header / Controls -->
+  <header class="fixed top-0 left-0 right-0 bg-blue-600 text-white px-3 py-2 flex flex-wrap gap-2 items-center z-10">
+    <h1 class="text-lg sm:text-xl font-bold"><i>Sarathi</i></h1>  
+    <select id="lang-select" class="mb-4 border rounded px-2 py-1">
+  <option value="en">English</option>
+  <option value="hi">हिन्दी</option>
+</select>
+
+
+    <div class="flex items-center gap-2 ml-auto">
+      <!-- Route Filter -->
+      <div class="relative">
+        <select id="route-filter" class="bg-blue-700 text-white px-3 py-1 rounded-md appearance-none pr-8 cursor-pointer">
+          <option value="all">All Routes</option>
+          <option value="route1">Amritsar → Jalandhar</option>
+          <option value="route2">Ludhiana → Chandigarh</option>
+          <option value="route3">Patiala → Ludhiana</option>
+          <option value="route4">Bathinda → Mansa</option>
+        </select>
+        <div class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">
+          <i class="fa-solid fa-chevron-down"></i>
+        </div>
+      </div>
+
+      <!-- Stop (Display Board) Selector -->
+      <div class="relative">
+        <select id="stop-select" class="bg-emerald-700 text-white px-3 py-1 rounded-md appearance-none pr-8 cursor-pointer min-w-[240px]" data-testid="stop-select" aria-label="Choose a stop to view arrivals">
+          <option value="">Display Board: choose a stop…</option>
+        </select>
+        <div class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">
+          <i class="fa-solid fa-location-dot"></i>
+        </div>
+      </div>
+
+      <!-- Locate Me -->
+      <button id="locate-me" class="bg-blue-700 hover:bg-blue-800 px-3 py-1 rounded-md">
+        <i class="fa-solid fa-location-crosshairs mr-1"></i>
+        <span class="hidden sm:inline">Locate Me</span>
+      </button>
+
+      <!-- Find Nearest Stop -->
+      <button id="find-shortest-route" class="bg-green-600 hover:bg-green-700 px-3 py-1 rounded-md">
+        <i class="fa-solid fa-route mr-1"></i>
+        <span class="hidden sm:inline">Nearest Stop</span>
+      </button>
+
+      <!-- Offline toggle (simulate) -->
+      <button id="toggle-offline" class="bg-amber-500 hover:bg-amber-600 px-3 py-1 rounded-md">
+        <i class="fa-solid fa-signal mr-1"></i>
+        <span class="hidden sm:inline">Go Offline</span>
+      </button>
+
+      <!-- Complaints -->
+      <button id="open-complaint" class="bg-rose-600 hover:bg-rose-700 px-3 py-1 rounded-md">
+        <i class="fa-regular fa-comment-dots mr-1"></i>
+        <span class="hidden sm:inline">Complaint</span>
+      </button>
+
+      <!-- Run Tests -->
+      <button id="run-tests" class="bg-slate-800 hover:bg-slate-900 px-3 py-1 rounded-md" title="Run built-in tests">
+        <i class="fa-solid fa-flask-vial mr-1"></i>
+        Tests
+      </button>
+    </div>
+  </header>
+
+  <!-- Map -->
+  <div id="map"></div>
+
+  <!-- Bus Details Panel -->
+  <aside id="details-panel" class="details-panel p-4 pt-16">
+    <div class="flex justify-between items-center mb-3">
+      <h2 class="text-xl font-bold">Bus Details</h2>
+      <button id="close-panel" class="text-gray-500 hover:text-gray-700" aria-label="Close details panel">
+        <i class="fa-solid fa-xmark text-xl"></i>
+      </button>
+    </div>
+    <div id="bus-info" class="space-y-4"></div>
+  </aside>
+
+  <!-- Floating Display Board Card -->
+  <div id="display-board" class="hidden fixed left-2 top-16 bg-white rounded-xl shadow-lg border w-[380px] max-w-[92vw] z-[999]" data-testid="display-board" aria-live="polite">
+    <div class="px-4 py-3 border-b flex items-center justify-between">
+      <div class="font-semibold">Stop Display</div>
+      <button id="close-board" class="text-gray-500 hover:text-gray-700" aria-label="Close stop display"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <div id="board-body" class="p-3 space-y-2 text-sm" data-testid="board-body"></div>
+  </div>
+
+  <!-- Complaint & Gender-Based Service Modal -->
+  <div id="complaint-modal" class="hidden fixed inset-0 bg-black/40 z-[1001] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="cmp-title">
+    <div class="bg-white rounded-xl w-full max-w-lg shadow-xl">
+      <div class="px-4 py-3 border-b flex justify-between items-center">
+        <h3 id="cmp-title" class="font-semibold">Raise a Complaint / Request Service</h3>
+        <button id="close-complaint" class="text-gray-500 hover:text-gray-700" aria-label="Close complaint form"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <form id="complaint-form" class="p-4 grid gap-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="text-sm" for="cmp-name">Name</label>
+            <input required id="cmp-name" class="mt-1 w-full border rounded-md px-3 py-2" placeholder="Your name" />
+          </div>
+          <div>
+            <label class="text-sm" for="cmp-gender">Gender</label>
+            <select id="cmp-gender" class="mt-1 w-full border rounded-md px-3 py-2" aria-label="Select gender">
+              <option value="female">Female</option>
+              <option value="male">Male</option>
+              <option value="other">Other / Prefer not to say</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="text-sm" for="cmp-route">Route</label>
+            <select id="cmp-route" class="mt-1 w-full border rounded-md px-3 py-2"></select>
+          </div>
+          <div>
+            <label class="text-sm" for="cmp-stop">Target Stop</label>
+            <select id="cmp-stop" class="mt-1 w-full border rounded-md px-3 py-2"></select>
+          </div>
+        </div>
+
+        <div>
+          <label class="text-sm" for="cmp-category">Service Category</label>
+          <select id="cmp-category" class="mt-1 w-full border rounded-md px-3 py-2">
+            <option value="safety">Safety/Escort</option>
+            <option value="medical">Medical Aid</option>
+            <option value="assistance">Assistance Desk</option>
+            <option value="cleanliness">Cleanliness/Seat Issue</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="text-sm" for="cmp-desc">Description</label>
+          <textarea required id="cmp-desc" class="mt-1 w-full border rounded-md px-3 py-2" rows="3" placeholder="Describe the issue or service needed"></textarea>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <input id="cmp-allow-contact" type="checkbox" class="h-4 w-4" />
+          <label for="cmp-allow-contact" class="text-sm">Allow support to contact me</label>
+        </div>
+
+        <div class="flex justify-between items-center gap-2 mt-2">
+          <p class="text-xs text-slate-500">
+            Tip: If the current arriving bus is crowded, your request will be auto-assigned to the <b>next arriving bus</b> at the selected stop.
+          </p>
+          <div class="flex gap-2">
+            <button type="button" id="cancel-complaint" class="px-4 py-2 rounded-md border">Cancel</button>
+            <button type="submit" class="px-4 py-2 rounded-md bg-rose-600 text-white">Submit</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Test Results Panel -->
+  <div id="test-panel" class="hidden fixed right-2 bottom-2 bg-white border rounded-lg shadow p-3 w-[360px] max-w-[90vw] z-[1003]">
+    <div class="flex items-center justify-between mb-2">
+      <div class="font-semibold">Self-Tests</div>
+      <button id="test-close" class="text-gray-500 hover:text-gray-700" aria-label="Close tests panel"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+    <ul id="test-list" class="space-y-1 text-sm"></ul>
+  </div>
+
+  <script>
+    /***************************
+     * 0) Base Map Init (Punjab view)
+     ***************************/
+    const map = L.map('map').setView([30.9, 75.85], 8.5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+
+    /***************************
+     * 1) Data (Punjab routes, stops, checkpoints)
+     ***************************/
+    const busRoutes = {
+      route1: { name: 'Amritsar to Jalandhar', color: '#FF5733',
+        path: [[31.6340,74.8723],[31.5040,74.9850],[31.5380,75.2820],[31.3700,75.3860],[31.3260,75.5762]],
+        stops: [
+          { name: 'Amritsar ISBT', position: [31.6340,74.8723] },
+          { name: 'Rayya', position: [31.5040,74.9850] },
+          { name: 'Beas', position: [31.5380,75.2820] },
+          { name: 'Kartarpur', position: [31.3700,75.3860] },
+          { name: 'Jalandhar Bus Stand', position: [31.3260,75.5762] }
+        ],
+        checkpoints: [[31.5600,75.10],[31.4200,75.48]]
+      },
+      route2: { name: 'Ludhiana to Chandigarh', color: '#33A8FF',
+        path: [[30.9010,75.8573],[30.8350,76.1930],[30.7461,76.6476],[30.7333,76.7794]],
+        stops: [
+          { name: 'Ludhiana Bus Stand', position: [30.9010,75.8573] },
+          { name: 'Samrala', position: [30.8350,76.1930] },
+          { name: 'Kharar', position: [30.7461,76.6476] },
+          { name: 'Chandigarh ISBT-17', position: [30.7333,76.7794] }
+        ],
+        checkpoints: [[30.8700,75.99],[30.7600,76.65]]
+      },
+      route3: { name: 'Patiala to Ludhiana', color: '#33FF57',
+        path: [[30.3398,76.3869],[30.3755,76.1518],[30.6420,76.3840],[30.9010,75.8573]],
+        stops: [
+          { name: 'Patiala ISBT', position: [30.3398,76.3869] },
+          { name: 'Nabha', position: [30.3755,76.1518] },
+          { name: 'Fatehgarh Sahib', position: [30.6420,76.3840] },
+          { name: 'Ludhiana Bus Stand', position: [30.9010,75.8573] }
+        ],
+        checkpoints: [[30.48,76.28],[30.76,76.20]]
+      },
+      route4: { name: 'Bathinda to Mansa', color: '#A855F7',
+        path: [[30.2110,74.9455],[30.0833,75.25],[30.0590,75.5350],[29.9975,75.4010]],
+        stops: [
+          { name: 'Bathinda Bus Stand', position: [30.2110,74.9455] },
+          { name: 'Maur', position: [30.0833,75.25] },
+          { name: 'Bhikhi', position: [30.0590,75.5350] },
+          { name: 'Mansa Bus Stand', position: [29.9975,75.4010] }
+        ],
+        checkpoints: [[30.15,75.12],[30.02,75.44]]
+      }
+    };
+
+    // Draw routes & stops
+    const routeLines = {};
+    Object.keys(busRoutes).forEach(routeId => {
+      const R = busRoutes[routeId];
+      routeLines[routeId] = L.polyline(R.path, { color: R.color, weight: 5, opacity: .75 }).addTo(map);
+      R.stops.forEach(stop => {
+        const m = L.circleMarker(stop.position, { radius: 5, fillColor: R.color, color: '#fff', weight: 2, fillOpacity: .9 }).addTo(map);
+        m.bindTooltip(stop.name);
+      });
+    });
+
+    /***************************
+     * 2) Buses (mock GPS) + Occupancy seed
+     ***************************/
+    function rndSpeed(){ return 18 + Math.random()*10; } // km/h
+    const buses = [
+      { id:'BUS-ASR-01', routeId:'route1', status:'On Time', position:0, direction:1, speedFactor:0.010, speedKmh:rndSpeed(), marker:null, lastLatLng:null, lastUpdate:Date.now(), occupancy:{ count:32, capacity:60, confidence:0.86 } },
+      { id:'BUS-LDH-22', routeId:'route2', status:'Delayed by 5 mins', position:0, direction:1, speedFactor:0.008, speedKmh:rndSpeed(), marker:null, lastLatLng:null, lastUpdate:Date.now(), occupancy:{ count:41, capacity:60, confidence:0.74 } },
+      { id:'BUS-PTA-07', routeId:'route3', status:'On Time', position:0, direction:1, speedFactor:0.011, speedKmh:rndSpeed(), marker:null, lastLatLng:null, lastUpdate:Date.now(), occupancy:{ count:18, capacity:60, confidence:0.92 } },
+      { id:'BUS-BTI-10', routeId:'route4', status:'On Time', position:0, direction:1, speedFactor:0.012, speedKmh:rndSpeed(), marker:null, lastLatLng:null, lastUpdate:Date.now(), occupancy:{ count:55, capacity:60, confidence:0.65 } },
+    ];
+
+    function createBusIcon(color){
+      return L.divIcon({ className:'bus-icon', html:`<i class="fa-solid fa-bus" style="color:${color}; font-size:22px; text-shadow:0 0 3px #fff;"></i>`, iconSize:[24,24], iconAnchor:[12,12] });
+    }
+    buses.forEach(bus => {
+      const R = busRoutes[bus.routeId];
+      const start = R.path[0];
+      bus.marker = L.marker(start, { icon: createBusIcon(R.color) }).addTo(map);
+      bus.marker.on('click', () => showBusDetails(bus));
+    });
+
+    /***************************
+     * 3) ETA utils
+     ***************************/
+    const R_EARTH = 6371; const toRad = d => d*Math.PI/180;
+    function haversine(a,b){ const [lat1,lon1]=a,[lat2,lon2]=b; const dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1); const x=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2; return 2*R_EARTH*Math.atan2(Math.sqrt(x),Math.sqrt(1-x)); }
+    function interpolate(path,pos){ const i=Math.floor(pos), n=Math.min(i+1, path.length-1), f=pos-i; return [ path[i][0]+(path[n][0]-path[i][0])*f, path[i][1]+(path[n][1]-path[i][1])*f ]; }
+    function distanceAlongRoute(path,pos,targetIndex){
+      let d=0; const i=Math.floor(pos); const fracPt=interpolate(path,pos);
+      if(i<targetIndex){ d+=haversine(fracPt,path[i+1]); for(let k=i+1;k<targetIndex;k++) d+=haversine(path[k],path[k+1]); }
+      else if(i>targetIndex){ d+=haversine(fracPt,path[i-1]); for(let k=i-1;k>targetIndex;k--) d+=haversine(path[k],path[k-1]); }
+      else { d+=haversine(fracPt,path[targetIndex]); }
+      return d;
+    }
+    function etaMinutes(bus, stopIndex){
+      const R = busRoutes[bus.routeId];
+      const dKm = distanceAlongRoute(R.path, bus.position, stopIndex);
+      const speed = Math.max(10, bus.speedKmh);
+      const min = (dKm / speed) * 60;
+      if(/Delayed/.test(bus.status)) return Math.round(min + 5);
+      if(/Breakdown/.test(bus.status)) return Infinity;
+      return Math.round(min);
+    }
+
+    /***************************
+     * 3b) Occupancy helpers
+     ***************************/
+    function getOccStatus(occ){
+      const pct = occ.capacity ? occ.count/occ.capacity : 0;
+      if (pct >= 1.0) return {key:'FULL', label:'Full', icon:'⛔', cls:'bg-gray-200 text-gray-800', pct};
+      if (pct >= 0.85) return {key:'CROWDED', label:'Crowded', icon:'🔴', cls:'bg-red-100 text-red-800', pct};
+      if (pct >= 0.60) return {key:'BUSY', label:'Busy', icon:'🔶', cls:'bg-amber-100 text-amber-800', pct};
+      if (pct >= 0.30) return {key:'COMFORTABLE', label:'Comfortable', icon:'◼️', cls:'bg-emerald-100 text-emerald-800', pct};
+      return {key:'EMPTY', label:'Empty', icon:'◻️', cls:'bg-green-100 text-green-800', pct};
+    }
+    function isCrowdedOcc(occ){ const k = getOccStatus(occ).key; return k==='CROWDED' || k==='FULL'; }
+    function occupancyBadgeHTML(occ){
+      const st = getOccStatus(occ);
+      const confPct = Math.round((occ.confidence ?? 0)*100);
+      const aria = `${st.label}, ${occ.count} of ${occ.capacity} (${Math.round(st.pct*100)}%), confidence ${confPct}%`;
+      const high = (occ.confidence ?? 0) >= 0.7;
+      const dotCls = `w-2 h-2 rounded-full border ${high ? 'bg-black/70 border-black/70' : 'bg-black/20 border-black/50 border-dashed'}`;
+      return `
+        <span class="inline-flex items-center gap-2 px-2 py-1 rounded-xl text-xs font-medium ${st.cls}" role="status" aria-label="${aria}">
+          <span>${st.icon} ${st.label}</span>
+          <span class="opacity-75">${occ.count}/${occ.capacity}</span>
+          <span class="${dotCls}" title="Confidence ${confPct}%"></span>
+        </span>
+      `;
+    }
+
+    /***************************
+     * 4) Animation + Offline checkpoint logging
+     ***************************/
+    let isOffline = false;
+    function tickOccupancy(bus){
+      const o = bus.occupancy; if(!o) return;
+      const delta = Math.random()<0.5 ? -1 : 1;
+      if (Math.random()<0.35) o.count += delta;
+      o.count = Math.max(0, Math.min(o.capacity, o.count));
+      const cJitter=(Math.random()-0.5)*0.03;
+      o.confidence = Math.max(0.3, Math.min(0.99, (o.confidence??0.8)+cJitter));
+    }
+    function maybeLogCheckpoint(bus){
+      const R = busRoutes[bus.routeId]; const here = interpolate(R.path, bus.position);
+      const thresholdKm = 0.15; const hits=[];
+      R.checkpoints.forEach((cp,i)=>{ if(haversine(here, cp) < thresholdKm) hits.push(i); });
+      if(hits.length){
+        const key='sarathi_checkpoint_logs'; const arr = JSON.parse(localStorage.getItem(key)||'[]');
+        arr.push({ t:Date.now(), busId:bus.id, route:bus.routeId, near:hits, latlng:here });
+        localStorage.setItem(key, JSON.stringify(arr));
+      }
+    }
+    function syncCheckpointLogs(){
+      const key='sarathi_checkpoint_logs'; const arr = JSON.parse(localStorage.getItem(key)||'[]');
+      if(!arr.length) return; toast(`${arr.length} checkpoint logs synced.`); localStorage.removeItem(key);
+    }
+    function animate(){
+      buses.forEach(bus => {
+        const R = busRoutes[bus.routeId], path = R.path;
+        bus.position += bus.speedFactor * bus.direction;
+        if(bus.position >= path.length-1){ bus.position = path.length-1; bus.direction = -1; }
+        else if(bus.position <= 0){ bus.position = 0; bus.direction = 1; }
+        const ll = interpolate(path, bus.position); bus.marker.setLatLng(ll);
+        const now = Date.now();
+        if(bus.lastLatLng){
+          const dtH=(now-bus.lastUpdate)/3600000; const dKm=haversine(bus.lastLatLng,ll);
+          const v=dKm/Math.max(0.0001,dtH); bus.speedKmh = 0.8*bus.speedKmh + 0.2*Math.min(45, Math.max(8, v));
+        }
+        bus.lastLatLng = ll; bus.lastUpdate = now;
+        tickOccupancy(bus);
+        if(isOffline) maybeLogCheckpoint(bus);
+      });
+      requestAnimationFrame(animate);
+    }
+    animate();
+
+    /***************************
+     * 5) Gender-Based Service Allocation (core)
+     ***************************/
+    /**
+     * serviceTasks schema:
+     * { id, t, gender, category, desc, name, allowContact,
+     *   routeId, stopIndex, busIdAssigned, etaAssigned, priority, status }
+     * status: queued | completed | canceled
+     */
+    const SERVICE_KEY = 'sarathi_service_tasks';
+    function loadTasks(){ return JSON.parse(localStorage.getItem(SERVICE_KEY)||'[]'); }
+    function saveTasks(arr){ localStorage.setItem(SERVICE_KEY, JSON.stringify(arr)); }
+
+    // Compute next arriving bus at stop (optionally skip crowded for female)
+    function nextArrivingBus(routeId, stopIndex, opts={}){
+      const rows = buses
+        .filter(b => b.routeId===routeId)
+        .map(b => ({ bus:b, eta: etaMinutes(b, stopIndex) }))
+        .filter(r => Number.isFinite(r.eta))
+        .sort((a,b)=>a.eta-b.eta);
+      if(!rows.length) return null;
+      if(opts.preferLessCrowded){
+        const ok = rows.find(r => !isCrowdedOcc(r.bus.occupancy));
+        if(ok) return ok; // less crowded available
+      }
+      return rows[0]; // fallback = earliest
+    }
+
+    // Assign a task to a bus (persist & toast)
+    function assignTaskToNextBus(task){
+      const preferLessCrowded = (task.gender==='female'); // policy: female → try to avoid crowded bus
+      const pick = nextArrivingBus(task.routeId, task.stopIndex, { preferLessCrowded });
+      if(!pick){
+        toast('No arriving buses found to assign the service.');
+        return null;
+      }
+      task.busIdAssigned = pick.bus.id;
+      task.etaAssigned = pick.eta;
+      task.status = 'queued';
+      const arr = loadTasks(); arr.push(task); saveTasks(arr);
+      toast(`Service assigned to ${pick.bus.id} at ${busRoutes[task.routeId].stops[task.stopIndex].name}`);
+      return task;
+    }
+
+    // Helper: fetch tasks matching a stop/bus
+    function tasksFor(routeId, stopIndex, busId){
+      return loadTasks().filter(t => t.routeId===routeId && t.stopIndex===stopIndex && t.busIdAssigned===busId && t.status==='queued');
+    }
+
+    // Clean up tasks whose ETA likely passed (demo heuristic)
+    function pruneOldTasks(){
+      const arr = loadTasks(); const now = Date.now();
+      const kept = arr.filter(t => (now - t.t) < 3*60*60*1000); // keep last 3 hours
+      if(kept.length !== arr.length) saveTasks(kept);
+    }
+    setInterval(pruneOldTasks, 60000);
+
+    // Badge renderer for board & details
+    function serviceBadgeHTML(task){
+      const icon = task.gender==='female' ? 'fa-venus' : (task.gender==='male' ? 'fa-mars' : 'fa-genderless');
+      const tone = task.gender==='female' ? 'bg-pink-100 text-pink-800 border-pink-200'
+                  : task.gender==='male' ? 'bg-blue-100 text-blue-800 border-blue-200'
+                  : 'bg-slate-100 text-slate-800 border-slate-200';
+      const catMap = { safety:'Safety/Escort', medical:'Medical Aid', assistance:'Assistance', cleanliness:'Cleanliness', other:'Other' };
+      const cat = catMap[task.category] || 'Service';
+      const aria = `${cat} requested for ${task.gender} passenger, assigned to next arriving bus`;
+      return `
+        <span class="inline-flex items-center gap-2 px-2 py-1 rounded-lg text-xs border ${tone}" role="note" aria-label="${aria}" title="${cat} for ${task.gender}">
+          <i class="fa-solid ${icon}"></i>
+          <span class="font-medium">${cat}</span>
+          <span class="opacity-70">ETA ~ ${task.etaAssigned}m</span>
+        </span>
+      `;
+    }
+
+    /***************************
+     * 6) Bus details with ETAs + Occupancy + Service cues
+     ***************************/
+    function showBusDetails(bus){
+      const panel = document.getElementById('details-panel');
+      const info = document.getElementById('bus-info');
+      const R = busRoutes[bus.routeId];
+      const statusClass = /Delayed|Breakdown/.test(bus.status) ? 'text-red-600' : 'text-green-600';
+
+      const stopsHTML = R.stops.map((s, idx) => {
+        const eta = etaMinutes(bus, idx);
+        const etaStr = eta===Infinity ? '<span class="text-red-600">N/A</span>' : `${eta} min`;
+        return `<li class="flex items-center justify-between gap-2">
+                  <div class="flex items-center gap-2">
+                    <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-slate-800 text-white text-xs">${idx+1}</span>
+                    <span>${s.name}</span>
+                  </div>
+                  <span class="font-medium">${etaStr}</span>
+                </li>`;
+      }).join('');
+
+      // If a stop is selected, show any tasks for this bus at that stop
+      let serviceHTML = '';
+      const selKey = document.getElementById('stop-select').value;
+      if (selKey){
+        const [rid, idxStr] = selKey.split(':'); const stopIdx = +idxStr;
+        if (rid === bus.routeId){
+          const arr = tasksFor(rid, stopIdx, bus.id);
+          if(arr.length){
+            serviceHTML = `
+              <div class="mt-3 p-3 rounded-lg border border-pink-200 bg-pink-50" role="region" aria-label="Assigned services at selected stop">
+                <div class="text-sm font-semibold mb-1"><i class="fa-solid fa-bell-concierge mr-1"></i>Assigned Services at <b>${R.stops[stopIdx].name}</b></div>
+                <div class="flex flex-col gap-1">
+                  ${arr.map(serviceBadgeHTML).join('')}
+                </div>
+              </div>
+            `;
+          }
+        }
+      }
+
+      // Suggest next less-crowded when current bus crowded (existing feature)
+      let suggestionHTML = '';
+      if (selKey){
+        const [rid, idxStr] = selKey.split(':');
+        if (rid === bus.routeId && isCrowdedOcc(bus.occupancy)) {
+          const stopIdx = +idxStr;
+          const sameRoute = buses
+            .filter(b => b.routeId === rid)
+            .map(b => ({ bus: b, eta: etaMinutes(b, stopIdx), etaStr: etaMinutes(b, stopIdx)===Infinity ? 'N/A' : `${etaMinutes(b, stopIdx)} min` }))
+            .filter(r => Number.isFinite(r.eta))
+            .sort((a,b)=>a.eta-b.eta);
+          const currentEta = sameRoute.find(r => r.bus.id === bus.id)?.eta ?? Infinity;
+          const alt = sameRoute.find(r => r.eta > currentEta && !isCrowdedOcc(r.bus.occupancy));
+          if (alt) {
+            suggestionHTML = `
+              <div class="mt-3 p-3 rounded-lg border border-amber-200 bg-amber-50" role="note" aria-label="Alternative suggestion: next less crowded bus">
+                <div class="text-sm font-semibold mb-1"><i class="fa-solid fa-people-arrows mr-1"></i>Next arrival (less crowded)</div>
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <div class="text-sm font-medium">${alt.bus.id}</div>
+                    <div class="mt-1">${occupancyBadgeHTML(alt.bus.occupancy)}</div>
+                  </div>
+                  <div class="text-lg font-bold" aria-label="ETA ${alt.etaStr}">${alt.etaStr}</div>
+                </div>
+              </div>
+            `;
+          }
+        }
+      }
+
+      info.innerHTML = `
+        <div class="p-3 bg-gray-100 rounded-lg space-y-1">
+          <div class="font-bold text-lg">Bus ID: ${bus.id}</div>
+          <div class="text-gray-700">Route: ${R.name}</div>
+          <div class="${statusClass} font-medium">Status: ${bus.status}</div>
+          <div class="text-gray-700">Live speed: ${bus.speedKmh.toFixed(1)} km/h</div>
+          <div class="pt-2">
+            <div class="text-gray-700 mb-1">Occupancy</div>
+            <div>${occupancyBadgeHTML(bus.occupancy)}</div>
+            ${suggestionHTML}
+            ${serviceHTML}
+          </div>
+        </div>
+        <div class="mt-4">
+          <h3 class="font-bold text-lg mb-2">ETAs for upcoming stops</h3>
+          <ul class="space-y-2">${stopsHTML}</ul>
+        </div>
+        <div class="mt-4 grid grid-cols-2 gap-2">
+          <button id="btn-breakdown" class="px-3 py-2 rounded-md bg-amber-600 text-white"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Report Breakdown</button>
+          <button id="btn-resume" class="px-3 py-2 rounded-md bg-green-700 text-white"><i class="fa-solid fa-wrench mr-1"></i>Resume Service</button>
+        </div>
+        <div class="mt-4 p-3 bg-blue-50 rounded-lg">
+          <div class="font-medium">Tracking Device</div>
+          <div class="text-gray-700">SIM808 GPS/GPRS Module (placeholder)</div>
+        </div>`;
+      setTimeout(() => {
+        document.getElementById('btn-breakdown').onclick = () => { bus.status = 'Breakdown reported'; toast(`Breakdown alert sent for ${bus.id}`); showBusDetails(bus); updateBoard(); };
+        document.getElementById('btn-resume').onclick = () => { bus.status = 'On Time'; toast(`${bus.id} back in service`); showBusDetails(bus); updateBoard(); };
+      }, 0);
+      panel.classList.add('open');
+    }
+    document.getElementById('close-panel').addEventListener('click', () => { document.getElementById('details-panel').classList.remove('open'); });
+
+    /***************************
+     * 7) Route filter
+     ***************************/
+    document.getElementById('route-filter').addEventListener('change', function(){
+      const select = this.value;
+      buses.forEach(b => { if(select==='all' || b.routeId===select) b.marker.addTo(map); else b.marker.remove(); });
+      Object.keys(routeLines).forEach(id => { if(select==='all' || id===select) routeLines[id].addTo(map); else routeLines[id].remove(); });
+      updateBoard();
+    });
+
+    /***************************
+     * 8) Geolocation (Passenger app)
+     ***************************/
+    let userLocationMarker=null, userLocationCircle=null, routeToNearestStop=null, currentUserLocation=null, geoWatch=null, tracking=false;
+    const geoOptions = { enableHighAccuracy:true, maximumAge:0, timeout:10000 };
+    function updateUserLocation(position){
+      const user = [position.coords.latitude, position.coords.longitude];
+      currentUserLocation = user;
+      if(userLocationMarker) userLocationMarker.remove();
+      if(userLocationCircle) userLocationCircle.remove();
+      userLocationMarker = L.marker(user, { icon: L.divIcon({ className:'user-location', html:'<i class="fa-solid fa-user" style="color:#4338ca; font-size:20px; text-shadow:0 0 3px #fff;"></i>', iconSize:[20,20], iconAnchor:[10,10] }) }).addTo(map);
+      if(!tracking){ map.setView(user, 12); tracking = true; }
+      userLocationCircle = L.circle(user, { radius: position.coords.accuracy, color:'#4338ca', fillColor:'#4338ca', fillOpacity:.1 }).addTo(map);
+    }
+    function handleLocationError(err){ alert(err.message || 'Failed to get location'); }
+    async function getGoogleGeolocation(){ try{ const res=await fetch('https://www.googleapis.com/geolocation/v1/geolocate?key=YOUR_API_KEY',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({considerIp:true})}); if(!res.ok) throw new Error('Google API '+res.status); const data=await res.json(); const position={ coords:{ latitude:data.location.lat, longitude:data.location.lng, accuracy:data.accuracy||100 } }; updateUserLocation(position); if(geoWatch) clearInterval(geoWatch); geoWatch=setInterval(getGoogleGeolocation,10000); tracking=true; }catch(e){ alert('Fallback geolocation failed: '+e.message); }}
+    document.getElementById('locate-me').addEventListener('click', () => {
+      if(geoWatch && typeof navigator.geolocation.clearWatch === 'function'){ navigator.geolocation.clearWatch(geoWatch); geoWatch=null; }
+      if(navigator.geolocation){ navigator.geolocation.getCurrentPosition(pos => { updateUserLocation(pos); geoWatch = navigator.geolocation.watchPosition(updateUserLocation, handleLocationError, geoOptions); }, err => { console.log('Browser geo failed; trying Google API', err); getGoogleGeolocation(); }, geoOptions); } else { getGoogleGeolocation(); }
+    });
+    document.addEventListener('visibilitychange', () => { if(document.visibilityState==='hidden' && geoWatch){ if(typeof navigator.geolocation.clearWatch==='function'){ navigator.geolocation.clearWatch(geoWatch); } geoWatch=null; } });
+
+    /***************************
+     * 9) Stop Display Board (smart boards) + Occupancy + Service cues
+     ***************************/
+    const stopSelect = document.getElementById('stop-select');
+    (function fillStopSelect(){
+      const seen = new Set();
+      Object.keys(busRoutes).forEach(rid => {
+        busRoutes[rid].stops.forEach((s, idx) => {
+          const key = rid+':'+idx; if(seen.has(key)) return;
+          const opt = document.createElement('option'); opt.value = key; opt.textContent = `${s.name} — ${busRoutes[rid].name}`;
+          stopSelect.appendChild(opt); seen.add(key);
+        });
+      });
+    })();
+
+    const board = document.getElementById('display-board');
+    const boardBody = document.getElementById('board-body');
+    document.getElementById('close-board').onclick = () => board.classList.add('hidden');
+    stopSelect.addEventListener('change', () => { updateBoard(true); });
+
+    function updateBoard(forceOpen=false){
+      const key = stopSelect.value; if(!key) return;
+      const [rid, idxStr] = key.split(':'); const stopIdx = +idxStr; const R = busRoutes[rid];
+      const filterVal = document.getElementById('route-filter').value;
+      const candidates = buses.filter(b => (filterVal==='all' || b.routeId===filterVal));
+      const rows = [];
+      candidates.forEach(b => {
+        if(rid !== b.routeId) return;
+        const eta=etaMinutes(b, stopIdx);
+        const etaStr = eta===Infinity? 'N/A' : `${eta} min`;
+        rows.push({ bus:b, eta, etaStr });
+      });
+      rows.sort((a,b)=>a.eta - b.eta);
+
+      boardBody.innerHTML = `
+        <div class="text-xs text-gray-500 mb-1">Stop: <b>${R.stops[stopIdx].name}</b> · Route: ${R.name}</div>
+        ${rows.slice(0,5).map((r, idx) => {
+          const alertBadge = /Breakdown/.test(r.bus.status) ? '<span class="ml-2 text-rose-600 font-semibold">Service Alert</span>' : '';
+          // service tasks for this bus at this stop
+          const pending = tasksFor(r.bus.routeId, stopIdx, r.bus.id);
+          const serviceHTML = pending.length
+            ? `<div class="mt-1 flex flex-wrap gap-1">${pending.map(serviceBadgeHTML).join('')}</div>`
+            : '';
+
+          // crowded → suggest next less-crowded
+          const alt = rows.slice(idx+1).find(x => !isCrowdedOcc(x.bus.occupancy));
+          const altHTML = isCrowdedOcc(r.bus.occupancy)
+            ? `<div class='mt-2 p-2 rounded-md border border-amber-200 bg-amber-50' role="note" aria-label="Next arrival less crowded ${alt ? alt.bus.id + ' ETA ' + alt.etaStr : 'not available soon'}">
+                 <div class="text-xs font-semibold mb-1"><i class="fa-solid fa-people-arrows mr-1"></i>Next arrival (less crowded)</div>
+                 ${ alt
+                    ? `<div class="flex items-center justify-between gap-2">
+                         <div><div class="text-xs font-medium">${alt.bus.id}</div><div class="mt-1">${occupancyBadgeHTML(alt.bus.occupancy)}</div></div>
+                         <div class="text-base font-bold">${alt.etaStr}</div>
+                       </div>`
+                    : `<div class="text-xs">No less crowded bus soon.</div>`}
+               </div>` : '';
+
+          return `<div class='flex items-center justify-between border rounded-lg px-3 py-2'>
+            <div class='flex flex-col gap-0.5'>
+              <div class='font-medium flex items-center gap-2'>
+                <span>${r.bus.id}</span>
+                <span class='text-xs text-gray-500'>(Speed ${r.bus.speedKmh.toFixed(0)} km/h)</span>
+                ${alertBadge}
+              </div>
+              <div class='text-xs ${/Delayed/.test(r.bus.status)?'text-amber-600':'text-emerald-700'}'>${r.bus.status}</div>
+              <div class='mt-1'>${occupancyBadgeHTML(r.bus.occupancy)}</div>
+              ${serviceHTML}
+              ${altHTML}
+            </div>
+            <div class='text-lg font-bold' aria-label="ETA ${r.etaStr}">${r.etaStr}</div>
+          </div>`;
+        }).join('')}
+      `;
+      if(forceOpen) board.classList.remove('hidden');
+    }
+    setInterval(() => { if(!board.classList.contains('hidden')) updateBoard(false); }, 3000);
+
+    /***************************
+     * 10) Offline toggle + sync
+     ***************************/
+    const offlineBtn = document.getElementById('toggle-offline');
+    offlineBtn.addEventListener('click', () => {
+      isOffline = !isOffline;
+      offlineBtn.querySelector('span').textContent = isOffline ? 'Go Online' : 'Go Offline';
+      offlineBtn.classList.toggle('bg-amber-500', !isOffline);
+      offlineBtn.classList.toggle('bg-amber-700', isOffline);
+      toast(isOffline ? 'Network lost – logging checkpoints locally' : 'Network restored');
+      if(!isOffline) syncCheckpointLogs();
+    });
+    window.addEventListener('online', () => { if(!isOffline){ syncCheckpointLogs(); toast('Online'); } });
+
+    /***************************
+     * 11) Complaint + Gender-Based Service flow (modal)
+     ***************************/
+    const modal = document.getElementById('complaint-modal');
+    document.getElementById('open-complaint').onclick = () => { modal.classList.remove('hidden'); fillComplaintSelectors(); };
+    document.getElementById('close-complaint').onclick = () => modal.classList.add('hidden');
+    document.getElementById('cancel-complaint').onclick = () => modal.classList.add('hidden');
+
+    function fillComplaintSelectors(){
+      const rSel = document.getElementById('cmp-route');
+      const sSel = document.getElementById('cmp-stop');
+      rSel.innerHTML = ''; sSel.innerHTML='';
+      Object.keys(busRoutes).forEach(rid => { const o=document.createElement('option'); o.value=rid; o.textContent=busRoutes[rid].name; rSel.appendChild(o); });
+      function fillStops(routeId){ sSel.innerHTML=''; busRoutes[routeId].stops.forEach((s,i)=>{ const o=document.createElement('option'); o.value=i; o.textContent=s.name; sSel.appendChild(o); }); }
+      const first = Object.keys(busRoutes)[0]; fillStops(first);
+      rSel.onchange = e => fillStops(e.target.value);
+
+      // Pre-fill from currently selected board stop if any
+      const key = document.getElementById('stop-select').value;
+      if(key){
+        const [rid, idxStr] = key.split(':');
+        rSel.value = rid; fillStops(rid); sSel.value = +idxStr;
+      }
+    }
+
+    document.getElementById('complaint-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const routeId = document.getElementById('cmp-route').value;
+      const stopIndex = +document.getElementById('cmp-stop').value;
+      const task = {
+        id: 'svc_'+Date.now(),
+        t: Date.now(),
+        name: document.getElementById('cmp-name').value.trim(),
+        gender: document.getElementById('cmp-gender').value,
+        category: document.getElementById('cmp-category').value,
+        desc: document.getElementById('cmp-desc').value.trim(),
+        allowContact: document.getElementById('cmp-allow-contact').checked,
+        routeId, stopIndex,
+        busIdAssigned: null, etaAssigned: null,
+        priority: (document.getElementById('cmp-gender').value==='female') ? 'high' : 'normal',
+        status: 'queued'
+      };
+      const assigned = assignTaskToNextBus(task);
+      modal.classList.add('hidden');
+      if(assigned){
+        updateBoard(true);
+        // If the assigned bus panel is open, refresh it
+        // (we can't know which bus panel is open; user will see cue on board)
+      }
+    });
+
+    /***************************
+     * 12) Toast helper
+     ***************************/
+    function toast(msg){
+      const el = document.createElement('div');
+      el.className = 'sarathi-toast fixed bottom-4 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-4 py-2 rounded-lg shadow z-[1002]';
+      el.textContent = String(msg);
+      document.body.appendChild(el);
+      setTimeout(()=>{ el.remove(); }, 2400);
+    }
+
+    /***************************
+     * 13) Built-in Self-Tests (incl. service assignment)
+     ***************************/
+    const testPanel = document.getElementById('test-panel');
+    const testList = document.getElementById('test-list');
+    document.getElementById('test-close').onclick = () => testPanel.classList.add('hidden');
+    document.getElementById('run-tests').addEventListener('click', runSelfTests);
+
+    function addTestResult(name, pass, note=''){
+      const li = document.createElement('li');
+      li.innerHTML = `<span class="${pass? 'bg-emerald-100 text-emerald-700':'bg-rose-100 text-rose-700'} test-badge">${pass? 'PASS':'FAIL'}</span> <b>${name}</b> ${note? '– '+note:''}`;
+      testList.appendChild(li);
+    }
+
+    function runSelfTests(){
+      testList.innerHTML = '';
+      testPanel.classList.remove('hidden');
+      let failures = 0;
+      try {
+        // Toast basic
+        const msg1 = 'Test: hello'; toast(msg1);
+        const toasts1 = document.querySelectorAll('.sarathi-toast');
+        const ok1 = toasts1.length > 0 && toasts1[toasts1.length-1].textContent === msg1;
+        addTestResult('toast basic', ok1); if(!ok1) failures++;
+        if(toasts1.length) setTimeout(()=>{ toasts1[toasts1.length-1]?.remove(); }, 100);
+
+        // ETA logic check
+        const bus = buses[0]; const e0 = etaMinutes(bus, 0); addTestResult('etaMinutes finite', Number.isFinite(e0)); if(!Number.isFinite(e0)) failures++;
+
+        // Service assign test (female → prefer less crowded)
+        // choose a stop, clear tasks, assign
+        localStorage.setItem(SERVICE_KEY, '[]');
+        const rid = 'route2', stopIndex = 1;
+        // make first bus crowded, second comfortable
+        const r2 = buses.filter(b=>b.routeId===rid);
+        if(r2.length >= 2){ r2[0].occupancy.count = 59; r2[0].occupancy.capacity = 60; r2[1].occupancy.count = 20; r2[1].occupancy.capacity = 60; }
+        const t = { id:'svc_test', t:Date.now(), name:'Test', gender:'female', category:'safety', desc:'help', allowContact:true, routeId:rid, stopIndex, status:'queued' };
+        const picked = assignTaskToNextBus(t);
+        const ok2 = picked && picked.busIdAssigned && (!isCrowdedOcc(r2.find(b=>b.id===picked.busIdAssigned).occupancy));
+        addTestResult('gender-based assignment prefers less crowded', !!ok2); if(!ok2) failures++;
+
+        // Board renders service badges
+        const sel = document.querySelector('#stop-select');
+        sel.value = `${rid}:${stopIndex}`; updateBoard(true);
+        const hasBadge = document.querySelector('[data-testid="board-body"]').innerHTML.includes('Assigned Services') || document.querySelector('[data-testid="board-body"]').innerHTML.includes('Safety/Escort') || document.querySelector('[data-testid="board-body"]').innerHTML.includes('fa-venus');
+        addTestResult('board shows service badge', hasBadge); if(!hasBadge) failures++;
+
+      } catch (err){
+        failures++;
+        addTestResult('unexpected error during tests', false, err.message);
+        console.error('Self-tests error:', err);
+      }
+      toast(failures ? `Tests completed – ${failures} failing` : 'All tests passed');
+    }
+
+    // Optional auto-run tests with ?test=1
+    try { const params = new URLSearchParams(location.search); if(params.get('test')==='1') runSelfTests(); } catch {}
+  </script>
+  <script>
+  const labels = {};
+  async function loadLanguage(lang) {
+    const res = await fetch(`lang/${lang}.json`);
+    Object.assign(labels, await res.json());
+    document.querySelector('h1').textContent = labels.chooseMode;
+    document.querySelectorAll('a')[0].textContent = '🚍 ' + labels.busTracking;
+    document.querySelectorAll('a')[1].textContent = '🚆 ' + labels.trainTracking;
+  }
+  document.getElementById('lang-select').addEventListener('change', e => loadLanguage(e.target.value));
+  loadLanguage('en'); // default
+</script>
+<script>
+  const labels = {};
+
+  async function loadLanguage(lang) {
+    const res = await fetch(`lang/${lang}.json`);
+    Object.assign(labels, await res.json());
+    // Update top-level labels
+    document.querySelector('h1').textContent = t('chooseMode');
+    document.querySelectorAll('a')[0].textContent = '🚍 ' + t('busTracking');
+    document.querySelectorAll('a')[1].textContent = '🚆 ' + t('trainTracking');
+
+    // Update buttons that exist on this page
+    const locateBtn = document.getElementById('locate-me');
+    const complaintBtn = document.getElementById('open-complaint');
+    if (locateBtn) locateBtn.textContent = t('locateMe');
+    if (complaintBtn) complaintBtn.textContent = t('complaint');
+  }
+
+  // Translator function
+  function t(key){ return labels[key] || key; }
+
+  // Language selector event
+  document.getElementById('lang-select')
+    .addEventListener('change', e => loadLanguage(e.target.value));
+
+  // Load default language on startup
+  loadLanguage('en');
+</script>
+
+</body>
+</html>
+
+

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Sarathi – Admin Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body class="bg-gray-100">
+  <header class="bg-blue-800 text-white px-4 py-3 flex justify-between items-center">
+    <h1 class="text-xl font-bold">Sarathi Admin</h1>
+    <nav class="space-x-4">
+      <button id="view-routes" class="px-3 py-1 bg-blue-600 rounded">Routes</button>
+      <button id="view-complaints" class="px-3 py-1 bg-blue-600 rounded">Complaints</button>
+      <button id="view-crowd" class="px-3 py-1 bg-blue-600 rounded">Crowd Levels</button>
+    </nav>
+  </header>
+
+  <main class="grid grid-cols-1 lg:grid-cols-3 gap-4 p-4">
+    <!-- Map -->
+    <section class="lg:col-span-2 bg-white rounded-xl shadow p-4">
+      <div id="map" class="h-[60vh] w-full rounded-lg"></div>
+    </section>
+    <!-- Complaints Panel -->
+    <aside id="complaints-panel" class="bg-white rounded-xl shadow p-4 overflow-y-auto max-h-[60vh]">
+      <h2 class="text-lg font-bold mb-2">Recent Complaints</h2>
+      <ul id="complaints-list" class="space-y-2 text-sm text-gray-700">
+        <!-- Complaints inserted here -->
+      </ul>
+    </aside>
+  </main>
+
+  <script>
+    // Initialize Leaflet map
+    const map = L.map('map').setView([30.9, 75.85], 7.5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    // Placeholder for complaints – integrate your localStorage data
+    const stored = JSON.parse(localStorage.getItem('sarathi_service_tasks') || '[]');
+stored.forEach(c => {
+  const li = document.createElement('li');
+  li.className = 'p-2 bg-gray-100 rounded';
+  li.textContent = `[${new Date(c.t).toLocaleTimeString()}] ${c.routeId || c.lineId} @ Stop/Station: ${c.desc}`;
+  list.appendChild(li);
+});
+    const list = document.getElementById('complaints-list');
+
+    // Button handlers
+    document.getElementById('view-routes').onclick = () => {
+      alert('Route management not implemented in this demo.');
+    };
+    document.getElementById('view-complaints').onclick = () => {
+      alert('Already viewing complaints.');
+    };
+    document.getElementById('view-crowd').onclick = () => {
+      alert('Crowd level monitoring not implemented in this demo.');
+    };
+  </script>
+</body>
+</html>

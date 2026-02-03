@@ -1,0 +1,10 @@
+{
+  "chooseMode": "Choose Your Mode",
+  "busTracking": "Bus Tracking",
+  "trainTracking": "Train Tracking",
+  "complaint": "Raise a Complaint",
+  "locateMe": "Locate Me",
+  "nearestStop": "Nearest Stop",
+  "statusDelayed": "Delayed",
+  "statusOnTime": "On Time"
+}

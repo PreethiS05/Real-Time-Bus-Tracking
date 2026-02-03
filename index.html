@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sarathi – Smart Transit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      height: 100vh;
+      background: linear-gradient(-45deg, #3b82f6, #06b6d4, #10b981, #6366f1);
+      background-size: 400% 400%;
+      animation: gradientMove 12s ease infinite;
+    }
+    @keyframes gradientMove {
+      0% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+  /* Force all common text elements to be dark gray */
+  body, h1, h2, h3, h4, h5, h6, p, a, label, select, option, button, span {
+    color: #1f2937 !important;  /* Tailwind gray-800 */
+  }
+
+
+    
+  </style>
+</head>
+<body class="flex items-center justify-center text-center text-white">
+  <div class="bg-black/40 backdrop-blur-lg rounded-3xl p-10 max-w-md w-full shadow-2xl">
+    <h1 class="text-3xl font-extrabold mb-4 tracking-tight">
+      <span class="text-yellow-300">Sarathi</span>
+    </h1>
+    
+    <select id="lang-select" class="mb-4 border rounded px-2 py-1">
+  <option value="en">English</option>
+  <option value="hi">हिन्दी</option>
+</select>
+
+    <p class="text-gray-200 mb-8">Seamless travel across Punjab – choose your ride</p>
+
+    <div class="flex flex-col gap-4">
+      <!-- Bus option -->
+      <button onclick="location.href='bus.html'"
+        class="px-6 py-3 rounded-xl bg-white/10 hover:bg-white/20 transition text-lg font-medium flex items-center justify-center gap-2">
+        <i class="fa-solid fa-bus"></i> Bus
+      </button>
+
+      <!-- Train option -->
+      <button onclick="location.href='train.html'"
+        class="px-6 py-3 rounded-xl bg-white/10 hover:bg-white/20 transition text-lg font-medium flex items-center justify-center gap-2">
+        <i class="fa-solid fa-train-subway"></i> Train
+      </button>
+    </div>
+  </div>
+
+  <!-- Font Awesome -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/js/all.min.js"></script>
+  <script>
+const labels = {};
+async function loadLanguage(lang) {
+  try {
+    const res = await fetch(`lang/${lang}.json`);
+    if (!res.ok) throw new Error('Language file not found');
+    const data = await res.json();
+    Object.assign(labels, data);
+    document.querySelector('h1').textContent = labels.chooseMode;
+    document.querySelectorAll('a')[0].textContent = '🚍 ' + labels.busTracking;
+    document.querySelectorAll('a')[1].textContent = '🚆 ' + labels.trainTracking;
+  } catch (e) {
+    console.error('Language load failed:', e);
+  }
+}
+document.getElementById('lang-select').addEventListener('change', e => loadLanguage(e.target.value));
+loadLanguage('en'); // Load English on first load
+</script>
+
+</body>
+</html>
